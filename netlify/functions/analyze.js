@@ -49,6 +49,7 @@ function buildDeepPrompt(input, fast) {
     "- choiceIndex is 0-based.",
     "- wrongAnswers must include every index except the chosen one.",
     "- keep explanations concise and practical.",
+    "- if unsure, still provide a best-effort short reason.",
     "",
     `Question: ${input.question}`,
     "Answers:",
@@ -115,6 +116,48 @@ function normalizeWrongAnswers(raw, choiceIndex, answers) {
     normalized[i] = reason;
   }
   return normalized;
+}
+
+function extractExplanation(parsed, rawText) {
+  const candidates = [
+    parsed?.explanation,
+    parsed?.reasoning,
+    parsed?.rationale,
+    parsed?.analysis,
+    parsed?.why,
+  ];
+  for (const candidate of candidates) {
+    if (typeof candidate === "string" && candidate.trim()) {
+      return candidate.trim();
+    }
+    if (candidate && typeof candidate !== "string") {
+      try {
+        return JSON.stringify(candidate);
+      } catch (error) {
+        return String(candidate);
+      }
+    }
+  }
+
+  const raw = String(rawText || "").trim();
+  if (raw && !raw.startsWith("{")) {
+    return raw;
+  }
+
+  return "";
+}
+
+function extractWrongAnswers(parsed) {
+  if (!parsed || typeof parsed !== "object") {
+    return null;
+  }
+  return (
+    parsed.wrongAnswers ||
+    parsed.incorrect ||
+    parsed.incorrectReasons ||
+    parsed.others ||
+    parsed.wrong
+  );
 }
 
 function normalizeModelName(name) {
@@ -291,14 +334,15 @@ async function analyzeWithGemini(apiKey, input) {
     700
   );
   const deepJson = parseJsonFromText(deepText) || {};
+  const explanation = extractExplanation(deepJson, deepText);
 
   return {
     choiceIndex,
     confidence,
     explanation:
-      deepJson.explanation || "No explanation was provided by the AI.",
+      explanation || "No explanation was provided by the AI.",
     wrongAnswers: normalizeWrongAnswers(
-      deepJson.wrongAnswers,
+      extractWrongAnswers(deepJson),
       choiceIndex,
       input.answers
     ),
@@ -320,14 +364,15 @@ async function analyzeWithOpenAI(apiKey, input) {
     buildDeepPrompt(input, { choiceIndex, confidence })
   );
   const deepJson = parseJsonFromText(deepText) || {};
+  const explanation = extractExplanation(deepJson, deepText);
 
   return {
     choiceIndex,
     confidence,
     explanation:
-      deepJson.explanation || "No explanation was provided by the AI.",
+      explanation || "No explanation was provided by the AI.",
     wrongAnswers: normalizeWrongAnswers(
-      deepJson.wrongAnswers,
+      extractWrongAnswers(deepJson),
       choiceIndex,
       input.answers
     ),

@@ -1,24 +1,71 @@
-import { parseQuestion, extractAnswerItems } from "./moodle/parser";
+import {
+  parseQuestion,
+  extractAnswerItems,
+  findCurrentQuestionElement,
+} from "./moodle/parser";
 import { observeQuestionChanges } from "./observer";
 import { analyzeQuestion, warmUp } from "./ai/index";
 import { getCachedResult, setCachedResult } from "./cache";
-import { applyMarker } from "./ui/marker";
+import { applyMarker, clearMarkers } from "./ui/marker";
 import { createPanel } from "./ui/panel";
 import { registerHotkey } from "./ui/hotkeys";
 import { hashQuestion } from "./utils/hash";
 
 const panel = createPanel();
-registerHotkey(() => panel.toggle());
 
 const state = {
   activeHash: "",
   pendingHash: "",
   pendingTimer: null,
   requestId: 0,
+  enabled: true,
 };
 
+registerHotkey(() => {
+  if (state.enabled) {
+    panel.toggle();
+  }
+});
+
+function getEnabledSetting() {
+  return new Promise((resolve) => {
+    chrome.storage.local.get(["aiEnabled"], (data) => {
+      resolve(data.aiEnabled !== false);
+    });
+  });
+}
+
+function clearPending() {
+  if (state.pendingTimer) {
+    clearTimeout(state.pendingTimer);
+    state.pendingTimer = null;
+  }
+  state.requestId += 1;
+  state.pendingHash = "";
+}
+
+function setEnabled(value) {
+  state.enabled = value;
+  if (!value) {
+    clearPending();
+    state.activeHash = "";
+    clearMarkers();
+    panel.hide();
+    return;
+  }
+
+  warmUp().catch(() => {
+    // Warm-up is best-effort.
+  });
+
+  const current = findCurrentQuestionElement();
+  if (current) {
+    handleQuestion(current);
+  }
+}
+
 function render(questionEl, parsed, result, hash) {
-  if (hash !== state.activeHash) {
+  if (!state.enabled || hash !== state.activeHash) {
     return;
   }
   const answerItems = extractAnswerItems(questionEl);
@@ -27,6 +74,10 @@ function render(questionEl, parsed, result, hash) {
 }
 
 async function handleQuestion(questionEl) {
+  if (!state.enabled || !questionEl) {
+    return;
+  }
+
   const parsed = parseQuestion(questionEl);
   if (!parsed.questionText || !parsed.answers.length) {
     return;
@@ -57,17 +108,28 @@ async function handleQuestion(questionEl) {
 
   state.pendingTimer = setTimeout(async () => {
     try {
+      if (!state.enabled) {
+        return;
+      }
       const result = await analyzeQuestion({
         question: parsed.questionText,
         answers: parsed.answers,
       });
-      if (requestId !== state.requestId || state.pendingHash !== hash) {
+      if (
+        !state.enabled ||
+        requestId !== state.requestId ||
+        state.pendingHash !== hash
+      ) {
         return;
       }
       await setCachedResult(hash, result);
       render(questionEl, parsed, result, hash);
     } catch (error) {
-      if (requestId !== state.requestId || state.pendingHash !== hash) {
+      if (
+        !state.enabled ||
+        requestId !== state.requestId ||
+        state.pendingHash !== hash
+      ) {
         return;
       }
       const message =
@@ -79,9 +141,16 @@ async function handleQuestion(questionEl) {
   }, 300);
 }
 
-warmUp().catch(() => {
-  // Warm-up is best-effort.
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (
+    area === "local" &&
+    Object.prototype.hasOwnProperty.call(changes, "aiEnabled")
+  ) {
+    setEnabled(changes.aiEnabled.newValue !== false);
+  }
 });
+
+getEnabledSetting().then((enabled) => setEnabled(enabled));
 
 observeQuestionChanges((questionEl) => {
   handleQuestion(questionEl);

@@ -28,7 +28,7 @@ export function createPanel() {
 
   const header = createEl("div", "ai-panel__header", "AI Assistant");
   const body = createEl("div", "ai-panel__body");
-  const footer = createEl("div", "ai-panel__footer", "Alt + A to toggle");
+  const footer = createEl("div", "ai-panel__footer", "Alt + E to toggle");
 
   panel.appendChild(header);
   panel.appendChild(body);

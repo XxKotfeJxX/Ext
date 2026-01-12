@@ -16,7 +16,7 @@ export function registerHotkey(onToggle) {
       !event.ctrlKey &&
       !event.metaKey &&
       !event.shiftKey &&
-      (event.key === "a" || event.key === "A")
+      (event.key === "e" || event.key === "E")
     ) {
       if (isEditableTarget(event.target)) {
         return;

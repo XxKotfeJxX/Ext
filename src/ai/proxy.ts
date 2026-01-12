@@ -1,4 +1,5 @@
-const RAW_PROXY_URL = "__AI_PROXY_URL__";
+const RAW_PROXY_URL =
+  typeof __AI_PROXY_URL__ === "string" ? __AI_PROXY_URL__ : "";
 
 function normalizeProxyUrl(value) {
   if (!value || value === "__AI_PROXY_URL__") {

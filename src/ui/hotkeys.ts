@@ -16,7 +16,7 @@ export function registerHotkey(onToggle) {
       !event.ctrlKey &&
       !event.metaKey &&
       !event.shiftKey &&
-      (event.key === "e" || event.key === "E")
+      event.code === "KeyE"
     ) {
       if (isEditableTarget(event.target)) {
         return;
@@ -26,6 +26,6 @@ export function registerHotkey(onToggle) {
     }
   };
 
-  document.addEventListener("keydown", handler);
-  return () => document.removeEventListener("keydown", handler);
+  window.addEventListener("keydown", handler, true);
+  return () => window.removeEventListener("keydown", handler, true);
 }

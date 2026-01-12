@@ -109,17 +109,35 @@ export function extractAnswerItems(questionEl) {
       input.parentElement ||
       input;
 
-    const text = extractText(label || container || input);
+    const target = label || container || input;
+    const text = extractText(target);
     if (!text) {
       return;
     }
 
     items.push({
       text,
-      element: label || container || input,
-      container: container || label || input,
+      element: target,
+      container: container || target,
     });
   });
+
+  if (!items.length) {
+    const rowSelectors = Array.from({ length: 10 }, (_, i) => `.answer .r${i}`)
+      .join(", ");
+    const rows = Array.from(questionEl.querySelectorAll(rowSelectors));
+    rows.forEach((row) => {
+      const text = extractText(row);
+      if (!text) {
+        return;
+      }
+      items.push({
+        text,
+        element: row,
+        container: row,
+      });
+    });
+  }
 
   return items;
 }

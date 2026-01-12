@@ -64,24 +64,33 @@ function parseJsonFromText(text) {
     return null;
   }
 
+  const tryParse = (value) => {
+    try {
+      return JSON.parse(value);
+    } catch (error) {
+      return null;
+    }
+  };
+
+  const stripTrailingCommas = (value) =>
+    value.replace(/,\s*([}\]])/g, "$1");
+
   const cleaned = text
     .trim()
     .replace(/^```json\s*/i, "")
     .replace(/^```\s*/i, "")
     .replace(/```$/i, "");
 
-  try {
-    return JSON.parse(cleaned);
-  } catch (error) {
-    const start = cleaned.indexOf("{");
-    const end = cleaned.lastIndexOf("}");
-    if (start >= 0 && end > start) {
-      try {
-        return JSON.parse(cleaned.slice(start, end + 1));
-      } catch (innerError) {
-        return null;
-      }
-    }
+  const direct = tryParse(cleaned) || tryParse(stripTrailingCommas(cleaned));
+  if (direct) {
+    return direct;
+  }
+
+  const start = cleaned.indexOf("{");
+  const end = cleaned.lastIndexOf("}");
+  if (start >= 0 && end > start) {
+    const sliced = cleaned.slice(start, end + 1);
+    return tryParse(sliced) || tryParse(stripTrailingCommas(sliced));
   }
 
   return null;
@@ -139,6 +148,13 @@ function extractExplanation(parsed, rawText) {
   }
 
   const raw = String(rawText || "").trim();
+  if (raw) {
+    const match = raw.match(/"explanation"\s*:\s*"([\s\S]*?)"\s*(,|})/);
+    if (match) {
+      return match[1].replace(/\\"/g, '"').trim();
+    }
+  }
+
   if (raw && !raw.startsWith("{")) {
     return raw;
   }

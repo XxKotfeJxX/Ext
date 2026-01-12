@@ -1,0 +1,27 @@
+{
+  "manifest_version": 2,
+  "name": "Moodle AI Assistant MVP",
+  "version": "0.2.0",
+  "description": "Assistive AI hints for Moodle quiz questions.",
+  "permissions": ["storage", "*://*/mod/quiz/*", "https://*/*", "http://*/*"],
+  "browser_action": {
+    "default_title": "Moodle AI Assistant",
+    "default_popup": "popup.html"
+  },
+  "background": {
+    "scripts": ["background.js"]
+  },
+  "content_scripts": [
+    {
+      "matches": ["*://*/mod/quiz/*"],
+      "js": ["content.js"],
+      "css": ["style.css"],
+      "run_at": "document_idle"
+    }
+  ],
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "moodle-ai-assistant@local"
+    }
+  }
+}

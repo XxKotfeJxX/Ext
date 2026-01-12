@@ -1,4 +1,8 @@
-const GEMINI_MODEL = "gemini-1.5-flash";
+const DEFAULT_GEMINI_MODELS = [
+  "gemini-1.5-flash-latest",
+  "gemini-1.5-flash",
+  "gemini-1.0-pro",
+];
 const OPENAI_MODEL = "gpt-4o-mini";
 
 const corsHeaders = {
@@ -108,12 +112,29 @@ function normalizeWrongAnswers(raw, choiceIndex, answers) {
   return normalized;
 }
 
-async function callGemini(apiKey, prompt, maxOutputTokens) {
+function getGeminiModels(env) {
+  const custom = env?.GEMINI_MODEL;
+  if (custom && custom.trim()) {
+    return [custom.trim()];
+  }
+  return DEFAULT_GEMINI_MODELS;
+}
+
+function isModelNotFound(error) {
+  const message = String(error?.message || "");
+  return (
+    message.includes("NOT_FOUND") ||
+    message.toLowerCase().includes("not found") ||
+    message.toLowerCase().includes("not supported")
+  );
+}
+
+async function callGemini(apiKey, model, prompt, maxOutputTokens) {
   if (!apiKey) {
     throw new Error("Missing GEMINI_API_KEY.");
   }
 
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${apiKey}`;
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
   const response = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -137,6 +158,22 @@ async function callGemini(apiKey, prompt, maxOutputTokens) {
     ?.map((part) => part.text)
     .join("");
   return text || "";
+}
+
+async function callGeminiWithFallback(env, apiKey, prompt, maxOutputTokens) {
+  const models = getGeminiModels(env);
+  let lastError = null;
+  for (const model of models) {
+    try {
+      return await callGemini(apiKey, model, prompt, maxOutputTokens);
+    } catch (error) {
+      lastError = error;
+      if (!isModelNotFound(error)) {
+        break;
+      }
+    }
+  }
+  throw lastError || new Error("Gemini request failed.");
 }
 
 async function callOpenAI(apiKey, prompt) {
@@ -167,8 +204,13 @@ async function callOpenAI(apiKey, prompt) {
   return data?.choices?.[0]?.message?.content || "";
 }
 
-async function analyzeWithGemini(apiKey, input) {
-  const fastText = await callGemini(apiKey, buildFastPrompt(input), 200);
+async function analyzeWithGemini(env, apiKey, input) {
+  const fastText = await callGeminiWithFallback(
+    env,
+    apiKey,
+    buildFastPrompt(input),
+    200
+  );
   const fastJson = parseJsonFromText(fastText) || {};
 
   const choiceIndex = sanitizeChoiceIndex(
@@ -177,7 +219,8 @@ async function analyzeWithGemini(apiKey, input) {
   );
   const confidence = sanitizeConfidence(fastJson.confidence);
 
-  const deepText = await callGemini(
+  const deepText = await callGeminiWithFallback(
+    env,
     apiKey,
     buildDeepPrompt(input, { choiceIndex, confidence }),
     700
@@ -272,7 +315,10 @@ export default {
       const result =
         provider === "openai" && env.OPENAI_API_KEY
           ? await analyzeWithOpenAI(env.OPENAI_API_KEY, { question, answers })
-          : await analyzeWithGemini(env.GEMINI_API_KEY, { question, answers });
+          : await analyzeWithGemini(env, env.GEMINI_API_KEY, {
+              question,
+              answers,
+            });
       return jsonResponse(result);
     } catch (error) {
       return jsonResponse(

@@ -60,7 +60,8 @@ export function createPanel() {
       );
       body.appendChild(createEl("div", "ai-panel__message", message));
     },
-    update(parsed, result) {
+    update(parsed, result, options = {}) {
+      const pendingExplanation = Boolean(options.pendingExplanation);
       body.textContent = "";
 
       body.appendChild(
@@ -99,40 +100,45 @@ export function createPanel() {
       explanation.appendChild(
         createEl("div", "ai-panel__title", "Why this is likely correct")
       );
+      const explanationText = pendingExplanation
+        ? "Loading detailed explanation..."
+        : result.explanation || "No explanation was provided by the AI.";
       explanation.appendChild(
-        createEl("div", "ai-panel__text", result.explanation || "")
+        createEl("div", "ai-panel__text", explanationText)
       );
       body.appendChild(explanation);
 
-      const wrongSection = createEl("div", "ai-panel__section");
-      wrongSection.appendChild(
-        createEl(
-          "div",
-          "ai-panel__title",
-          "Why other answers are likely incorrect"
-        )
-      );
-      const list = createEl("ul", "ai-panel__list");
-      parsed.answers.forEach((answer, idx) => {
-        if (idx === result.choiceIndex) {
-          return;
-        }
-        const reason =
-          result.wrongAnswers?.[idx] ||
-          result.wrongAnswers?.[String(idx)] ||
-          "No specific rationale provided.";
-        const item = createEl("li", "ai-panel__list-item");
-        const label = createEl(
-          "strong",
-          "ai-panel__list-label",
-          `${formatChoiceLabel(idx)}. `
+      if (!pendingExplanation) {
+        const wrongSection = createEl("div", "ai-panel__section");
+        wrongSection.appendChild(
+          createEl(
+            "div",
+            "ai-panel__title",
+            "Why other answers are likely incorrect"
+          )
         );
-        item.appendChild(label);
-        item.appendChild(document.createTextNode(`${answer} — ${reason}`));
-        list.appendChild(item);
-      });
-      wrongSection.appendChild(list);
-      body.appendChild(wrongSection);
+        const list = createEl("ul", "ai-panel__list");
+        parsed.answers.forEach((answer, idx) => {
+          if (idx === result.choiceIndex) {
+            return;
+          }
+          const reason =
+            result.wrongAnswers?.[idx] ||
+            result.wrongAnswers?.[String(idx)] ||
+            "No specific rationale provided.";
+          const item = createEl("li", "ai-panel__list-item");
+          const label = createEl(
+            "strong",
+            "ai-panel__list-label",
+            `${formatChoiceLabel(idx)}. `
+          );
+          item.appendChild(label);
+          item.appendChild(document.createTextNode(`${answer} - ${reason}`));
+          list.appendChild(item);
+        });
+        wrongSection.appendChild(list);
+        body.appendChild(wrongSection);
+      }
     },
   };
 

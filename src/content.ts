@@ -18,12 +18,85 @@ const state = {
   pendingHash: "",
   pendingTimer: null,
   requestId: 0,
+  deepRequestId: 0,
   enabled: true,
+  current: null,
+  result: null,
 };
 
+function normalizeResult(raw) {
+  if (!raw) {
+    return null;
+  }
+
+  const explanation =
+    typeof raw.explanation === "string" ? raw.explanation.trim() : "";
+  const wrongAnswers =
+    raw.wrongAnswers && typeof raw.wrongAnswers === "object"
+      ? raw.wrongAnswers
+      : {};
+
+  return {
+    choiceIndex: Number.isFinite(Number(raw.choiceIndex))
+      ? Number(raw.choiceIndex)
+      : 0,
+    confidence: Number.isFinite(Number(raw.confidence))
+      ? Number(raw.confidence)
+      : 0,
+    explanation,
+    wrongAnswers,
+  };
+}
+
+function isExplanationComplete(result) {
+  if (!result) {
+    return false;
+  }
+  const explanation = (result.explanation || "").trim();
+  if (!explanation) {
+    return false;
+  }
+  return explanation !== "No explanation was provided by the AI.";
+}
+
+function updatePanel(pendingExplanation) {
+  if (!panel.isVisible() || !state.current || !state.result) {
+    return;
+  }
+  panel.update(state.current.parsed, state.result, {
+    pendingExplanation,
+  });
+}
+
+function applyResult() {
+  if (!state.enabled || !state.current || !state.result) {
+    return;
+  }
+
+  const { questionEl, parsed, hash } = state.current;
+  if (hash !== state.activeHash) {
+    return;
+  }
+
+  const answerItems = extractAnswerItems(questionEl);
+  applyMarker(answerItems, state.result.choiceIndex);
+
+  if (panel.isVisible()) {
+    if (isExplanationComplete(state.result)) {
+      updatePanel(false);
+    } else {
+      ensureExplanation();
+    }
+  }
+}
+
 registerHotkey(() => {
-  if (state.enabled) {
-    panel.toggle();
+  if (!state.enabled) {
+    return;
+  }
+  panel.toggle();
+  if (panel.isVisible()) {
+    ensureExplanation();
   }
 });
 
@@ -41,6 +114,7 @@ function clearPending() {
     state.pendingTimer = null;
   }
   state.requestId += 1;
+  state.deepRequestId += 1;
   state.pendingHash = "";
 }
 
@@ -49,6 +123,8 @@ function setEnabled(value) {
   if (!value) {
     clearPending();
     state.activeHash = "";
+    state.current = null;
+    state.result = null;
     clearMarkers();
     panel.hide();
     return;
@@ -64,13 +140,55 @@ function setEnabled(value) {
   }
 }
 
-function render(questionEl, parsed, result, hash) {
-  if (!state.enabled || hash !== state.activeHash) {
+async function ensureExplanation() {
+  if (!state.enabled || !state.current || !state.result) {
     return;
   }
-  const answerItems = extractAnswerItems(questionEl);
-  applyMarker(answerItems, result.choiceIndex);
-  panel.update(parsed, result);
+
+  if (isExplanationComplete(state.result)) {
+    updatePanel(false);
+    return;
+  }
+
+  const { parsed, hash } = state.current;
+  const requestId = (state.deepRequestId += 1);
+
+  updatePanel(true);
+
+  try {
+    const deepResult = await analyzeQuestion({
+      question: parsed.questionText,
+      answers: parsed.answers,
+      mode: "deep",
+      choiceIndex: state.result.choiceIndex,
+      confidence: state.result.confidence,
+    });
+
+    if (
+      !state.enabled ||
+      requestId !== state.deepRequestId ||
+      state.activeHash !== hash
+    ) {
+      return;
+    }
+
+    state.result = normalizeResult({ ...state.result, ...deepResult });
+    await setCachedResult(hash, state.result);
+    applyResult();
+  } catch (error) {
+    if (
+      !state.enabled ||
+      requestId !== state.deepRequestId ||
+      state.activeHash !== hash
+    ) {
+      return;
+    }
+    const message =
+      error && error.message
+        ? `Detailed analysis failed: ${error.message}`
+        : "Detailed analysis failed.";
+    panel.showMessage(message);
+  }
 }
 
 async function handleQuestion(questionEl) {
@@ -91,10 +209,15 @@ async function handleQuestion(questionEl) {
 
   state.activeHash = hash;
   state.pendingHash = hash;
+  state.current = { questionEl, parsed, hash };
 
-  const cached = await getCachedResult(hash);
+  const cached = normalizeResult(await getCachedResult(hash));
   if (cached) {
-    render(questionEl, parsed, cached, hash);
+    state.result = cached;
+    applyResult();
+    if (panel.isVisible() && !isExplanationComplete(cached)) {
+      ensureExplanation();
+    }
     return;
   }
 
@@ -102,7 +225,10 @@ async function handleQuestion(questionEl) {
     clearTimeout(state.pendingTimer);
   }
 
-  panel.showMessage("Analyzing the current question...");
+  if (panel.isVisible()) {
+    panel.showMessage("Analyzing the current question...");
+  }
+
   state.requestId += 1;
   const requestId = state.requestId;
 
@@ -111,10 +237,14 @@ async function handleQuestion(questionEl) {
       if (!state.enabled) {
         return;
       }
-      const result = await analyzeQuestion({
-        question: parsed.questionText,
-        answers: parsed.answers,
-      });
+      const result = normalizeResult(
+        await analyzeQuestion({
+          question: parsed.questionText,
+          answers: parsed.answers,
+          mode: "fast",
+        })
+      );
+
       if (
         !state.enabled ||
         requestId !== state.requestId ||
@@ -122,8 +252,13 @@ async function handleQuestion(questionEl) {
       ) {
         return;
       }
+
+      state.result = result;
       await setCachedResult(hash, result);
-      render(questionEl, parsed, result, hash);
+      applyResult();
+      if (panel.isVisible()) {
+        ensureExplanation();
+      }
     } catch (error) {
       if (
         !state.enabled ||

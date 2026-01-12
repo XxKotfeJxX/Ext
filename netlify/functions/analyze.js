@@ -255,6 +255,15 @@ function isModelNotFound(error) {
   );
 }
 
+function isRateLimited(error) {
+  const message = String(error?.message || "");
+  return (
+    message.includes("429") ||
+    message.toLowerCase().includes("resource_exhausted") ||
+    message.toLowerCase().includes("rate limit")
+  );
+}
+
 async function callGemini(apiKey, model, prompt, maxOutputTokens) {
   if (!apiKey) {
     throw new Error("Missing GEMINI_API_KEY.");
@@ -330,19 +339,41 @@ async function callOpenAI(apiKey, prompt) {
   return data?.choices?.[0]?.message?.content || "";
 }
 
-async function analyzeWithGemini(apiKey, input) {
-  const fastText = await callGeminiWithFallback(
-    apiKey,
-    buildFastPrompt(input),
-    200
-  );
-  const fastJson = parseJsonFromText(fastText) || {};
+async function analyzeWithGemini(apiKey, input, options = {}) {
+  const mode = typeof options.mode === "string" ? options.mode : "full";
+  let choiceIndex = null;
+  let confidence = null;
 
-  const choiceIndex = sanitizeChoiceIndex(
-    fastJson.choiceIndex,
-    input.answers.length
-  );
-  const confidence = sanitizeConfidence(fastJson.confidence);
+  if (mode === "deep") {
+    const providedChoice = Number(options.choiceIndex);
+    if (Number.isFinite(providedChoice)) {
+      choiceIndex = sanitizeChoiceIndex(providedChoice, input.answers.length);
+      confidence = sanitizeConfidence(options.confidence);
+    }
+  }
+
+  if (mode !== "deep" || choiceIndex === null) {
+    const fastText = await callGeminiWithFallback(
+      apiKey,
+      buildFastPrompt(input),
+      200
+    );
+    const fastJson = parseJsonFromText(fastText) || {};
+    choiceIndex = sanitizeChoiceIndex(
+      fastJson.choiceIndex,
+      input.answers.length
+    );
+    confidence = sanitizeConfidence(fastJson.confidence);
+
+    if (mode === "fast") {
+      return {
+        choiceIndex,
+        confidence,
+        explanation: "",
+        wrongAnswers: {},
+      };
+    }
+  }
 
   const deepText = await callGeminiWithFallback(
     apiKey,
@@ -365,15 +396,37 @@ async function analyzeWithGemini(apiKey, input) {
   };
 }
 
-async function analyzeWithOpenAI(apiKey, input) {
-  const fastText = await callOpenAI(apiKey, buildFastPrompt(input));
-  const fastJson = parseJsonFromText(fastText) || {};
+async function analyzeWithOpenAI(apiKey, input, options = {}) {
+  const mode = typeof options.mode === "string" ? options.mode : "full";
+  let choiceIndex = null;
+  let confidence = null;
 
-  const choiceIndex = sanitizeChoiceIndex(
-    fastJson.choiceIndex,
-    input.answers.length
-  );
-  const confidence = sanitizeConfidence(fastJson.confidence);
+  if (mode === "deep") {
+    const providedChoice = Number(options.choiceIndex);
+    if (Number.isFinite(providedChoice)) {
+      choiceIndex = sanitizeChoiceIndex(providedChoice, input.answers.length);
+      confidence = sanitizeConfidence(options.confidence);
+    }
+  }
+
+  if (mode !== "deep" || choiceIndex === null) {
+    const fastText = await callOpenAI(apiKey, buildFastPrompt(input));
+    const fastJson = parseJsonFromText(fastText) || {};
+    choiceIndex = sanitizeChoiceIndex(
+      fastJson.choiceIndex,
+      input.answers.length
+    );
+    confidence = sanitizeConfidence(fastJson.confidence);
+
+    if (mode === "fast") {
+      return {
+        choiceIndex,
+        confidence,
+        explanation: "",
+        wrongAnswers: {},
+      };
+    }
+  }
 
   const deepText = await callOpenAI(
     apiKey,
@@ -415,6 +468,12 @@ exports.handler = async (event) => {
   const answers = Array.isArray(payload?.answers)
     ? payload.answers.map((answer) => String(answer || "").trim())
     : [];
+  const mode = typeof payload?.mode === "string" ? payload.mode : "full";
+  const options = {
+    mode: mode.toLowerCase(),
+    choiceIndex: payload?.choiceIndex,
+    confidence: payload?.confidence,
+  };
 
   if (!question || !answers.length) {
     return jsonResponse(
@@ -425,16 +484,33 @@ exports.handler = async (event) => {
 
   try {
     const provider = process.env.AI_PROVIDER || "gemini";
-    const result =
-      provider === "openai" && process.env.OPENAI_API_KEY
-        ? await analyzeWithOpenAI(process.env.OPENAI_API_KEY, {
-            question,
-            answers,
-          })
-        : await analyzeWithGemini(process.env.GEMINI_API_KEY, {
-            question,
-            answers,
-          });
+    let result = null;
+
+    if (provider === "openai" && process.env.OPENAI_API_KEY) {
+      result = await analyzeWithOpenAI(
+        process.env.OPENAI_API_KEY,
+        { question, answers },
+        options
+      );
+    } else {
+      try {
+        result = await analyzeWithGemini(
+          process.env.GEMINI_API_KEY,
+          { question, answers },
+          options
+        );
+      } catch (error) {
+        if (isRateLimited(error) && process.env.OPENAI_API_KEY) {
+          result = await analyzeWithOpenAI(
+            process.env.OPENAI_API_KEY,
+            { question, answers },
+            options
+          );
+        } else {
+          throw error;
+        }
+      }
+    }
     return jsonResponse(result);
   } catch (error) {
     return jsonResponse(

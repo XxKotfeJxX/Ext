@@ -3,6 +3,10 @@ const DEFAULT_GEMINI_MODELS = [
   "gemini-1.5-flash",
   "gemini-1.0-pro",
 ];
+
+const MODEL_CACHE_TTL_MS = 5 * 60 * 1000;
+let cachedModelList = null;
+let cachedModelListAt = 0;
 const OPENAI_MODEL = "gpt-4o-mini";
 
 const corsHeaders = {
@@ -112,12 +116,74 @@ function normalizeWrongAnswers(raw, choiceIndex, answers) {
   return normalized;
 }
 
-function getGeminiModels(env) {
-  const custom = env?.GEMINI_MODEL;
-  if (custom && custom.trim()) {
-    return [custom.trim()];
+function normalizeModelName(name) {
+  return String(name || "")
+    .trim()
+    .replace(/^models\//, "");
+}
+
+async function listGeminiModels(apiKey) {
+  const response = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`
+  );
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Gemini listModels error ${response.status}: ${text}`);
   }
-  return DEFAULT_GEMINI_MODELS;
+
+  const data = await response.json();
+  const models = Array.isArray(data?.models) ? data.models : [];
+  return models
+    .filter((model) =>
+      Array.isArray(model.supportedGenerationMethods)
+        ? model.supportedGenerationMethods.includes("generateContent")
+        : false
+    )
+    .map((model) => normalizeModelName(model.name))
+    .filter(Boolean);
+}
+
+async function getGeminiModels(env, apiKey) {
+  const candidates = [];
+  const custom = normalizeModelName(env?.GEMINI_MODEL);
+  if (custom) {
+    candidates.push(custom);
+  }
+
+  const now = Date.now();
+  if (cachedModelList && now - cachedModelListAt < MODEL_CACHE_TTL_MS) {
+    cachedModelList.forEach((model) => {
+      if (!candidates.includes(model)) {
+        candidates.push(model);
+      }
+    });
+    return candidates;
+  }
+
+  try {
+    const list = await listGeminiModels(apiKey);
+    if (list.length) {
+      cachedModelList = list;
+      cachedModelListAt = now;
+      list.forEach((model) => {
+        if (!candidates.includes(model)) {
+          candidates.push(model);
+        }
+      });
+      return candidates;
+    }
+  } catch (error) {
+    // Ignore and fall back to defaults.
+  }
+
+  DEFAULT_GEMINI_MODELS.forEach((model) => {
+    if (!candidates.includes(model)) {
+      candidates.push(model);
+    }
+  });
+
+  return candidates;
 }
 
 function isModelNotFound(error) {
@@ -161,7 +227,7 @@ async function callGemini(apiKey, model, prompt, maxOutputTokens) {
 }
 
 async function callGeminiWithFallback(env, apiKey, prompt, maxOutputTokens) {
-  const models = getGeminiModels(env);
+  const models = await getGeminiModels(env, apiKey);
   let lastError = null;
   for (const model of models) {
     try {

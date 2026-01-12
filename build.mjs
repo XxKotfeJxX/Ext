@@ -4,8 +4,12 @@ const proxyUrl = process.env.AI_PROXY_URL || "";
 
 esbuild
   .build({
-    entryPoints: ["src/content.ts"],
-    outfile: "dist/content.js",
+    entryPoints: {
+      content: "src/content.ts",
+      background: "src/background.ts",
+    },
+    outdir: "dist",
+    entryNames: "[name]",
     bundle: true,
     format: "iife",
     platform: "browser",

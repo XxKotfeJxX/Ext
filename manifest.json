@@ -8,6 +8,9 @@
     "default_title": "Moodle AI Assistant",
     "default_popup": "popup.html"
   },
+  "background": {
+    "service_worker": "dist/background.js"
+  },
   "host_permissions": ["https://*/*", "http://*/*"],
   "content_scripts": [
     {
